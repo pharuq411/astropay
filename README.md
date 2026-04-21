@@ -68,8 +68,8 @@ cargo run
 
 If you are evaluating the repo for production-readiness, read:
 
-- [`usdc-payment-link-tool/DEPLOY_CHECKLIST.md`](</home/dreamgene/Downloads/astropay-v2/usdc-payment-link-tool/DEPLOY_CHECKLIST.md>)
-- [`rust-backend/README.md`](</home/dreamgene/Downloads/astropay-v2/rust-backend/README.md>)
+- [usdc-payment-link-tool/DEPLOY_CHECKLIST.md](usdc-payment-link-tool/DEPLOY_CHECKLIST.md)
+- [rust-backend/README.md](rust-backend/README.md)
 
 The right reading is not “Rust solved everything.”
 
@@ -79,3 +79,25 @@ The right reading is:
 - the backend extraction has started
 - the Rust service is real
 - the remaining parity work is still explicit
+
+## Issue backlog
+
+Contributor planning now lives in:
+
+- [docs/issue-backlog/astropay-250-issues.md](docs/issue-backlog/astropay-250-issues.md)
+- [.github/ISSUE_TEMPLATE/backlog-item.md](.github/ISSUE_TEMPLATE/backlog-item.md)
+- [scripts/publish_issue_backlog.py](scripts/publish_issue_backlog.py)
+
+That backlog is intentionally grounded in the current repo state:
+
+- Next.js still owns checkout XDR build and settlement execution today
+- Rust owns only part of the operational backend
+- contributor issues should move the architecture forward without pretending parity already exists
+
+To publish the markdown backlog as real GitHub issues after re-authenticating the CLI:
+
+```bash
+gh auth login -h github.com
+python3 scripts/publish_issue_backlog.py --repo dreamgenies/astropay --limit 25
+python3 scripts/publish_issue_backlog.py --repo dreamgenies/astropay --start AP-026 --end AP-050
+```
