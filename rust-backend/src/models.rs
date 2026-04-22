@@ -1,3 +1,8 @@
+//! HTTP-facing models mapped from SQL rows.
+//!
+//! Merchant sessions are persisted in the `sessions` table (not represented as a struct here). Storage layout and indexes are defined under
+//! `../usdc-payment-link-tool/migrations/`; see [`crate::auth::current_merchant`] and [`crate::db`] for query assumptions.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
