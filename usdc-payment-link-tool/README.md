@@ -42,7 +42,9 @@ This is the only honest way to implement fee-splitting without lying to yourself
 Stores merchant identity and settlement wallet.
 
 ### sessions
-Stores long-lived merchant sessions.
+Stores long-lived merchant sessions (JWT references `sessions.id`). Auth checks use the row’s primary key plus `expires_at > NOW()`.
+
+Indexes evolve across migrations: `001_init.sql` creates starter btree indexes; **`002_session_expiry_indexes.sql`** replaces them with `(expires_at, id)` for global expiry sweeps and `(merchant_id, expires_at)` for merchant-scoped cleanup (the latter’s left prefix still supports `WHERE merchant_id = $1` alone). Run `npm run db:migrate` or `cargo run --bin migrate` from `rust-backend` so 002 is applied in production.
 
 ### invoices
 Stores hosted invoice details and lifecycle state.
