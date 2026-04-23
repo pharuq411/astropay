@@ -158,18 +158,78 @@ export const markInvoiceExpired = async (invoiceId: string) => {
   await query(`UPDATE invoices SET status = 'expired', updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [invoiceId]);
 };
 
-export const pendingInvoices = async () => {
-  const result = await query<Invoice>(`SELECT * FROM invoices WHERE status = 'pending' ORDER BY created_at ASC LIMIT 100`);
-  return result.rows;
+const RECONCILE_PAGE_SIZE = 100;
+const SETTLE_PAGE_SIZE = 100;
+
+/**
+ * Returns ALL pending invoices using keyset pagination so backlogs larger than
+ * a single page are fully drained in one call without manual babysitting.
+ *
+ * Cursor: (created_at, id) — stable and covered by the existing status + created_at indexes.
+ * Each page fetches up to RECONCILE_PAGE_SIZE rows; iteration stops when a page is smaller
+ * than the page size (last page reached).
+ */
+export const pendingInvoices = async (): Promise<Invoice[]> => {
+  const all: Invoice[] = [];
+  let cursorCreatedAt = new Date(0).toISOString();
+  let cursorId = '00000000-0000-0000-0000-000000000000';
+
+  while (true) {
+    const result = await query<Invoice>(
+      `SELECT * FROM invoices
+       WHERE status = 'pending'
+         AND (created_at, id) > ($1, $2)
+       ORDER BY created_at ASC, id ASC
+       LIMIT $3`,
+      [cursorCreatedAt, cursorId, RECONCILE_PAGE_SIZE],
+    );
+    const rows = result.rows;
+    all.push(...rows);
+
+    if (rows.length < RECONCILE_PAGE_SIZE) break;
+
+    // Advance cursor to the last row on this page.
+    const last = rows[rows.length - 1];
+    cursorCreatedAt = last.created_at;
+    cursorId = last.id;
+  }
+
+  return all;
 };
 
-export const queuedPayouts = async () => {
-  const result = await query<any>(
-    `SELECT payouts.*, invoices.public_id, invoices.net_amount_cents, invoices.asset_code, invoices.asset_issuer, invoices.id as invoice_id_ref
-     FROM payouts JOIN invoices ON invoices.id = payouts.invoice_id
-     WHERE payouts.status IN ('queued','failed') ORDER BY payouts.created_at ASC LIMIT 50`,
-  );
-  return result.rows;
+/**
+ * Returns ALL queued/failed payouts using keyset pagination so backlogs larger
+ * than a single page are fully drained in one call.
+ *
+ * Cursor: (created_at, id) — stable across pages.
+ */
+export const queuedPayouts = async (): Promise<any[]> => {
+  const all: any[] = [];
+  let cursorCreatedAt = new Date(0).toISOString();
+  let cursorId = '00000000-0000-0000-0000-000000000000';
+
+  while (true) {
+    const result = await query<any>(
+      `SELECT payouts.*, invoices.public_id, invoices.net_amount_cents,
+              invoices.asset_code, invoices.asset_issuer, invoices.id as invoice_id_ref
+       FROM payouts JOIN invoices ON invoices.id = payouts.invoice_id
+       WHERE payouts.status IN ('queued', 'failed')
+         AND (payouts.created_at, payouts.id) > ($1, $2)
+       ORDER BY payouts.created_at ASC, payouts.id ASC
+       LIMIT $3`,
+      [cursorCreatedAt, cursorId, SETTLE_PAGE_SIZE],
+    );
+    const rows = result.rows;
+    all.push(...rows);
+
+    if (rows.length < SETTLE_PAGE_SIZE) break;
+
+    const last = rows[rows.length - 1];
+    cursorCreatedAt = last.created_at;
+    cursorId = last.id;
+  }
+
+  return all;
 };
 
 export const markPayoutSubmitted = async (payoutId: string, txHash: string) => {
