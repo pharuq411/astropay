@@ -10,6 +10,8 @@ What it currently owns:
 - webhook-driven payment marking (`/api/webhooks/stellar`)
 - a Rust migration runner that reuses the existing SQL migrations
 
+Reconciliation and the Stellar webhook validate each merchant `settlement_public_key` with Stellar strkey decoding before inserting into `payouts`. Invalid keys skip payout queueing (invoice still marked paid) and emit a `payment_events` row with `event_type = payout_skipped_invalid_destination`. Run `cargo test` for strkey coverage.
+
 What is intentionally not faked yet:
 
 - buyer XDR generation/submission for checkout
