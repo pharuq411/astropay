@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { isConnected, requestAccess, signTransaction } from '@stellar/freighter-api';
+import { PendingSettlementBanner } from './PendingSettlementBanner';
 
 type Props = { invoiceId: string; status: string; };
 
@@ -18,7 +19,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       const data = await res.json();
       if (res.ok) {
         setStatus(data.status);
-        if (['pending', 'paid'].includes(data.status)) timer = setTimeout(poll, 5000);
+        if (['pending', 'paid', 'processing'].includes(data.status)) timer = setTimeout(poll, 5000);
       }
     }
     poll();
@@ -73,6 +74,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       </div>
       {address ? <p className="muted">Payer: <span className="mono">{address}</span></p> : null}
       {error ? <p className="error">{error}</p> : null}
+      <PendingSettlementBanner status={status} />
     </div>
   );
 }
