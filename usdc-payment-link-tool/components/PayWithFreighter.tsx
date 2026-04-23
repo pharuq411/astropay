@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { isConnected, requestAccess, signTransaction } from '@stellar/freighter-api';
+import { PendingSettlementBanner } from './PendingSettlementBanner';
 import { PaymentFailurePanel } from '@/components/PaymentFailurePanel';
 import { resolveCheckoutFailure, type CheckoutFailureStage } from '@/lib/paymentFailure';
 
@@ -37,7 +38,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       const data = (await readJsonBody(res)) as { status?: string };
       if (res.ok && data.status) {
         setStatus(data.status);
-        if (['pending', 'paid'].includes(data.status)) timer = setTimeout(poll, 5000);
+        if (['pending', 'paid', 'processing'].includes(data.status)) timer = setTimeout(poll, 5000);
       }
     }
     poll();
@@ -168,6 +169,9 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
           {loading ? 'Processing...' : 'Pay now'}
         </button>
       </div>
+      {address ? <p className="muted">Payer: <span className="mono">{address}</span></p> : null}
+      {error ? <p className="error">{error}</p> : null}
+      <PendingSettlementBanner status={status} />
       {address ? (
         <p className="muted">
           Payer: <span className="mono">{address}</span>

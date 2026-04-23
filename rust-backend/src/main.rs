@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod handlers;
 mod models;
+mod settle;
 mod stellar;
 
 use axum::{

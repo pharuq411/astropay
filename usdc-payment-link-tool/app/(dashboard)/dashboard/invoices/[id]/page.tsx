@@ -3,6 +3,8 @@ import { notFound, redirect } from 'next/navigation';
 import { getCurrentMerchant } from '@/lib/auth';
 import { getMerchantInvoice } from '@/lib/data';
 import { centsToUsd, isoToLocal } from '@/lib/format';
+import { PendingSettlementBanner } from '@/components/PendingSettlementBanner';
+import { CopyButton } from '@/components/CopyButton';
 
 export default async function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const merchant = await getCurrentMerchant();
@@ -17,11 +19,14 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
         <div className="badge">Invoice</div>
         <h1 style={{ margin: 0 }}>{invoice.description}</h1>
         <p className="muted">Status: <strong>{invoice.status}</strong></p>
+        <PendingSettlementBanner status={invoice.status} />
         <p>Gross: <strong>{centsToUsd(invoice.gross_amount_cents)}</strong></p>
         <p>Platform fee: <strong>{centsToUsd(invoice.platform_fee_cents)}</strong></p>
         <p>Merchant net: <strong>{centsToUsd(invoice.net_amount_cents)}</strong></p>
-        <p className="muted mono">Public link: {invoice.checkout_url}</p>
-        <p className="muted mono">Memo: {invoice.memo}</p>
+        <div className="copy-row"><span className="muted small">ID:</span><span className="mono muted small">{invoice.id}</span><CopyButton value={invoice.id} /></div>
+        <div className="copy-row"><span className="muted small">Public ID:</span><span className="mono muted small">{invoice.public_id}</span><CopyButton value={invoice.public_id} /></div>
+        <div className="copy-row"><span className="muted">Memo:</span><span className="mono muted">{invoice.memo}</span><CopyButton value={invoice.memo} /></div>
+        {invoice.checkout_url ? <div className="copy-row"><span className="muted">Public link:</span><span className="mono muted small">{invoice.checkout_url}</span><CopyButton value={invoice.checkout_url} /></div> : null}
         <p className="muted">Created: {isoToLocal(invoice.created_at)}</p>
         <p className="muted">Expires: {isoToLocal(invoice.expires_at)}</p>
         <div className="row">

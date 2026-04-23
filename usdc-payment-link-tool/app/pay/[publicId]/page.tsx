@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { PayWithFreighter } from '@/components/PayWithFreighter';
+import { CopyButton } from '@/components/CopyButton';
 import { getInvoiceByPublicId } from '@/lib/data';
 import { centsToUsd, isoToLocal } from '@/lib/format';
 
@@ -16,8 +17,8 @@ export default async function PayPage({ params }: { params: Promise<{ publicId: 
         <p>Amount: <strong>{centsToUsd(invoice.gross_amount_cents)}</strong></p>
         <p className="muted">USDC on Stellar</p>
         <p className="muted">Expires: {isoToLocal(invoice.expires_at)}</p>
-        <p className="muted mono">Memo: {invoice.memo}</p>
-        <p className="muted mono">Destination: {invoice.destination_public_key}</p>
+        <div className="copy-row"><span className="muted">Memo:</span><span className="mono muted">{invoice.memo}</span><CopyButton value={invoice.memo} /></div>
+        <div className="copy-row"><span className="muted">Destination:</span><span className="mono muted">{invoice.destination_public_key}</span><CopyButton value={invoice.destination_public_key} /></div>
       </div>
       <div className="stack">
         <div className="card stack">
