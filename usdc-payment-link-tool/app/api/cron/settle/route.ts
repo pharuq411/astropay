@@ -9,7 +9,11 @@ import {
   queuedPayouts,
   recordCronRun,
 } from '@/lib/data';
+import { getInvoiceById, markPayoutFailed, markPayoutSettled, markPayoutSubmitted, queuedPayouts, recordCronRun } from '@/lib/data';
 import { isValidSettlementPublicKey } from '@/lib/stellarPublicKey';
+
+/** Default number of queued payouts processed per settle run. Override with SETTLE_BATCH_SIZE env var. */
+const DEFAULT_SETTLE_BATCH_SIZE = 50;
 
 function authorized(request: Request) {
   const auth = request.headers.get('authorization');
@@ -20,6 +24,8 @@ function authorized(request: Request) {
 export async function GET(request: Request) {
   if (!authorized(request)) return fail('Unauthorized', 401);
 
+  const dryRun = new URL(request.url).searchParams.get('dry_run') === 'true';
+  const batchSize = Math.max(1, Number(env.settleBatchSize) || DEFAULT_SETTLE_BATCH_SIZE);
   let processed = 0;
   const results: Array<Record<string, unknown>> = [];
   let success = true;
@@ -27,7 +33,7 @@ export async function GET(request: Request) {
 
   try {
     assertSettlementConfig();
-    const payouts = await queuedPayouts();
+    const payouts = await queuedPayouts(batchSize);
     processed = payouts.length;
 
     for (const payout of payouts) {
@@ -46,28 +52,42 @@ export async function GET(request: Request) {
           invoice,
           destination: payout.destination_public_key,
         });
+        if (!dryRun) await markPayoutFailed(payout.id, reason);
+        results.push({ payoutId: payout.id, action: 'failed', reason });
+        continue;
+      }
+      try {
+        const invoice = await getInvoiceById(payout.invoice_id_ref);
+        if (!invoice || invoice.status !== 'paid') continue;
+        if (dryRun) {
+          results.push({ payoutId: payout.id, action: 'would_settle' });
+          continue;
+        }
+        const tx = await buildSettlementXdr({ invoice, destination: payout.destination_public_key });
         const submission = await getServer().submitTransaction(tx);
         await markPayoutSubmitted(payout.id, submission.hash);
         await markPayoutSettled(payout.id, payout.invoice_id_ref, submission.hash);
         results.push({ payoutId: payout.id, action: 'settled', txHash: submission.hash });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Settlement failed';
-        await markPayoutFailed(payout.id, message);
+        if (!dryRun) await markPayoutFailed(payout.id, message);
         results.push({ payoutId: payout.id, action: 'failed', reason: message });
       }
     }
 
-    return ok({ processed, results });
+    return ok({ dryRun, batchSize, processed, results });
   } catch (error) {
     success = false;
     errorDetail = error instanceof Error ? error.message : 'settle failed';
     return fail(errorDetail, 500);
   } finally {
-    await recordCronRun({
-      jobType: 'settle',
-      success,
-      metadata: { processed, results },
-      errorDetail,
-    });
+    if (!dryRun) {
+      await recordCronRun({
+        jobType: 'settle',
+        success,
+        metadata: { batchSize, processed, results },
+        errorDetail,
+      });
+    }
   }
 }
