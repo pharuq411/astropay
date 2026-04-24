@@ -56,6 +56,8 @@ pub struct Config {
     /// Set to 0 (default) to scan all pending invoices regardless of age.
     pub reconcile_scan_window_hours: i64,
     pub log_format: LogFormat,
+    /// Number of days to keep settled invoices in the main table before archiving. Defaults to 30.
+    pub archive_retention_days: i64,
 }
 
 impl Config {
@@ -119,6 +121,10 @@ impl Config {
             log_format: LogFormat::from_env(
                 &env::var("LOG_FORMAT").unwrap_or_else(|_| "human".to_string()),
             ),
+            archive_retention_days: env::var("ARCHIVE_RETENTION_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
         })
     }
 
@@ -157,6 +163,7 @@ mod tests {
             reconcile_scan_limit: 100,
             reconcile_scan_window_hours: 0,
             log_format: LogFormat::Human,
+            archive_retention_days: 30,
         }
     }
 
