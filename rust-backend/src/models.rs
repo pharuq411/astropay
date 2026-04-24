@@ -133,6 +133,24 @@ pub struct PayoutDeadLetter {
     pub created_at: DateTime<Utc>,
 }
 
+/// One row per inbound webhook call in the `webhook_deliveries_audit` table
+/// (migration `014_webhook_deliveries_audit.sql`).
+#[allow(dead_code)]
+#[derive(Clone, Serialize)]
+pub struct WebhookDelivery {
+    pub id: Uuid,
+    pub delivery_id: String,
+    pub source: String,
+    pub status: String,
+    pub payload: Value,
+    pub headers: Option<Value>,
+    pub error_detail: Option<String>,
+    pub invoice_id: Option<Uuid>,
+    pub replay_of: Option<String>,
+    pub received_at: DateTime<Utc>,
+    pub processed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Deserialize)]
 pub struct StellarWebhookRequest {
     #[serde(rename = "publicId")]
@@ -243,6 +261,25 @@ impl CronRun {
             success: row.get("success"),
             metadata: row.get("metadata"),
             error_detail: row.get("error_detail"),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl WebhookDelivery {
+    pub fn from_row(row: &Row) -> Self {
+        Self {
+            id: row.get("id"),
+            delivery_id: row.get("delivery_id"),
+            source: row.get("source"),
+            status: row.get("status"),
+            payload: row.get("payload"),
+            headers: row.get("headers"),
+            error_detail: row.get("error_detail"),
+            invoice_id: row.get("invoice_id"),
+            replay_of: row.get("replay_of"),
+            received_at: row.get("received_at"),
+            processed_at: row.get("processed_at"),
         }
     }
 }

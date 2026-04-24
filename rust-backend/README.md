@@ -50,6 +50,9 @@ What is intentionally not faked yet:
 
 Those routes return `501 Not Implemented` in the Rust service until the Stellar transaction logic is ported properly.
 
+The tests, rollout gates, and rollback triggers required before Rust owns checkout are documented in
+[`docs/checkout-rust-cutover-checklist.md`](../docs/checkout-rust-cutover-checklist.md).
+
 ## Session cookie security
 
 The `Secure` flag on the `astropay_session` cookie is driven by `APP_URL`:
