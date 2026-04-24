@@ -189,7 +189,6 @@ impl IntoResponse for AppError {
                 Json(LegacyErrorBody {
                     error: "Unexpected error".to_string(),
                 }),
-                Json(LegacyErrorBody { error: "Unexpected error".to_string() }),
             )
                 .into_response(),
         }

@@ -276,7 +276,7 @@ mod tests {
         is_valid_account_public_key, payment_matches_invoice,
     };
     use crate::{
-        config::Config,
+        config::{Config, LogFormat},
         horizon_fixtures::{
             ASSET_CODE, ASSET_ISSUER, DESTINATION_ACCOUNT, INVOICE_AMOUNT, INVOICE_MEMO,
             horizon_payment_cases,
@@ -337,6 +337,9 @@ mod tests {
             login_rate_ip_max: 80,
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
+            reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 0,
+            log_format: LogFormat::Human,
         }
     }
 
