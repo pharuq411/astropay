@@ -17,6 +17,8 @@ export async function GET(request: Request) {
   let success = true;
   let errorDetail: string | null = null;
   try {
+    // pendingInvoices() uses keyset pagination internally and returns the full
+    // backlog regardless of size — no arbitrary cap.
     const invoices = await pendingInvoices();
     scanned = invoices.length;
 

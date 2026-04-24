@@ -12,6 +12,23 @@ What it currently owns:
 
 Reconciliation and the Stellar webhook validate each merchant `settlement_public_key` with Stellar strkey decoding before inserting into `payouts`. Invalid keys skip payout queueing (invoice still marked paid) and emit a `payment_events` row with `event_type = payout_skipped_invalid_destination`. Run `cargo test` for strkey coverage.
 
+## Reconciliation and settle pagination
+
+Both cron handlers process the **full backlog** in a single invocation using keyset pagination — there is no arbitrary row cap.
+
+| Handler | Table | Cursor columns | Page size constant |
+|---|---|---|---|
+| `GET /api/cron/reconcile` | `invoices WHERE status = 'pending'` | `(created_at, id)` | `RECONCILE_PAGE_SIZE = 100` |
+| `GET /api/cron/settle` | `payouts WHERE status = 'failed'` | `(updated_at, id)` | `SETTLE_PAGE_SIZE = 100` |
+
+Each page fetches up to the page-size constant ordered by the cursor columns ASC. The loop exits when a page returns fewer rows than the page size (last page reached). The cursor is advanced to the last row of each page before the next query.
+
+The settle cursor uses `updated_at` rather than `created_at` because each processed row is immediately updated — its `updated_at` advances past the cursor, so it cannot be re-fetched in a subsequent page of the same run.
+
+The same pagination logic is applied in the TypeScript Next.js route handlers via `pendingInvoices()` and `queuedPayouts()` in `lib/data.ts`.
+
+**Verify:** `cargo test reconcile_uses_keyset_pagination` and `cargo test settle_uses_keyset_pagination` pin the cursor SQL. The TypeScript pagination logic is covered by `lib/pagination.test.ts`.
+
 What is intentionally not faked yet:
 
 - buyer XDR generation/submission for checkout
