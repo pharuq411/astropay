@@ -59,6 +59,30 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn invoice_settled_after_paid_migration_defines_check_constraint() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/015_invoice_settled_after_paid_check.sql");
+        let sql = std::fs::read_to_string(path).expect("read 015_invoice_settled_after_paid_check.sql");
+        assert!(sql.contains("ALTER TABLE invoices"), "must alter invoices table");
+        assert!(sql.contains("invoices_settled_after_paid_check"), "must name the constraint");
+        assert!(sql.contains("settled_at >= paid_at"), "must enforce settled_at >= paid_at");
+    }
+
+    #[test]
+    fn webhook_deliveries_audit_migration_defines_table_and_indexes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/014_webhook_deliveries_audit.sql");
+        let sql = std::fs::read_to_string(path).expect("read 014_webhook_deliveries_audit.sql");
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS webhook_deliveries_audit"));
+        assert!(sql.contains("delivery_id    TEXT    NOT NULL UNIQUE"));
+        assert!(sql.contains("CHECK (status IN ('received', 'processed', 'failed', 'duplicate'))"));
+        assert!(sql.contains("webhook_deliveries_audit_source_received_at_idx"));
+        assert!(sql.contains("webhook_deliveries_audit_status_received_at_idx"));
+        assert!(sql.contains("replay_of"));
+        assert!(sql.contains("invoice_id"));
+    }
+
+    #[test]
     fn merchant_email_citext_migration_alters_column_and_rebuilds_constraint() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../usdc-payment-link-tool/migrations/013_merchant_email_citext.sql");
