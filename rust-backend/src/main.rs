@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cron/settle", get(handlers::cron::settle))
         .route("/api/cron/purge-sessions", get(handlers::cron::purge_sessions))
         .route("/api/cron/payouts/:payout_id/replay", axum::routing::post(handlers::cron::replay_payout))
+        .route("/api/cron/orphan-payments", get(handlers::cron::orphan_payments))
         .route(
             "/api/webhooks/stellar",
             post(handlers::misc::stellar_webhook),
