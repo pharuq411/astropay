@@ -12,6 +12,11 @@ What it currently owns:
 
 Reconciliation and the Stellar webhook validate each merchant `settlement_public_key` with Stellar strkey decoding before inserting into `payouts`. Invalid keys skip payout queueing (invoice still marked paid) and emit a `payment_events` row with `event_type = payout_skipped_invalid_destination`. Run `cargo test` for strkey coverage.
 
+## Horizon payment fixtures
+
+Reusable synthetic Horizon payment payloads live in `src/horizon_fixtures.rs`. They cover good matches, bad matches, and ambiguous same-amount/same-destination cases where the transaction memo must disambiguate the invoice. The fixtures deliberately use synthetic transaction hashes and safe public test strings, not live payment data.
+
+**Verify:** `cargo test horizon_payment` exercises the fixture library through the Rust reconciliation matching logic.
 ## Invoice-paid / payout-queued isolation
 
 The Rust reconcile, replay, and Stellar webhook paths share one money-state helper for marking an invoice paid and queueing its payout. The helper runs inside a single Postgres transaction and uses `UPDATE invoices ... WHERE id = $1 AND status = 'pending'` as a compare-and-set boundary. If a concurrent worker already moved the invoice out of `pending`, the update affects zero rows and the helper does not insert a `payment_events` row or a `payouts` row.

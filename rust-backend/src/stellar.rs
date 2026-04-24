@@ -275,7 +275,14 @@ mod tests {
         build_checkout_url, invoice_amount_to_asset, invoice_is_expired,
         is_valid_account_public_key, payment_matches_invoice,
     };
-    use crate::{config::Config, models::Invoice};
+    use crate::{
+        config::Config,
+        horizon_fixtures::{
+            ASSET_CODE, ASSET_ISSUER, DESTINATION_ACCOUNT, INVOICE_AMOUNT, INVOICE_MEMO,
+            horizon_payment_cases,
+        },
+        models::Invoice,
+    };
 
     fn sample_invoice() -> Invoice {
         Invoice {
@@ -285,10 +292,10 @@ mod tests {
             description: "Test invoice".to_string(),
             amount_cents: 1250,
             currency: "USD".to_string(),
-            asset_code: "USDC".to_string(),
-            asset_issuer: "ISSUER".to_string(),
-            destination_public_key: "DESTINATION".to_string(),
-            memo: "astro_deadbeef".to_string(),
+            asset_code: ASSET_CODE.to_string(),
+            asset_issuer: ASSET_ISSUER.to_string(),
+            destination_public_key: DESTINATION_ACCOUNT.to_string(),
+            memo: INVOICE_MEMO.to_string(),
             status: "pending".to_string(),
             gross_amount_cents: 1250,
             platform_fee_cents: 13,
@@ -345,7 +352,7 @@ mod tests {
     #[test]
     fn converts_invoice_amount_to_stellar_precision() {
         let invoice = sample_invoice();
-        assert_eq!(invoice_amount_to_asset(&invoice), "12.50");
+        assert_eq!(invoice_amount_to_asset(&invoice), INVOICE_AMOUNT);
     }
 
     #[test]
@@ -358,52 +365,49 @@ mod tests {
     #[test]
     fn matches_horizon_payment_payload_to_invoice() {
         let invoice = sample_invoice();
-        let record = json!({
-            "to": "DESTINATION",
-            "asset_code": "USDC",
-            "asset_issuer": "ISSUER",
-            "amount": "12.50"
-        });
-        assert!(payment_matches_invoice(&record, "astro_deadbeef", &invoice));
+        let case = horizon_payment_cases()
+            .into_iter()
+            .find(|case| case.name == "exact_usdc_payment")
+            .expect("exact_usdc_payment fixture");
+        assert!(payment_matches_invoice(&case.payment, case.memo, &invoice));
     }
 
     #[test]
     fn rejects_wrong_asset_or_memo() {
         let invoice = sample_invoice();
-        let wrong_asset = json!({
-            "to": "DESTINATION",
-            "asset_code": "XLM",
-            "asset_issuer": "ISSUER",
-            "amount": "12.50"
-        });
-        let wrong_memo = json!({
-            "to": "DESTINATION",
-            "asset_code": "USDC",
-            "asset_issuer": "ISSUER",
-            "amount": "12.50"
-        });
-        assert!(!payment_matches_invoice(
-            &wrong_asset,
-            "astro_deadbeef",
-            &invoice
-        ));
-        assert!(!payment_matches_invoice(
-            &wrong_memo,
-            "astro_other",
-            &invoice
-        ));
+        for case in horizon_payment_cases()
+            .into_iter()
+            .filter(|case| !case.expected_match)
+        {
+            assert!(
+                !payment_matches_invoice(&case.payment, case.memo, &invoice),
+                "fixture should not match invoice: {}",
+                case.name
+            );
+        }
     }
 
     #[test]
     fn accepts_account_field_when_to_is_missing() {
         let invoice = sample_invoice();
-        let record = json!({
-            "account": "DESTINATION",
-            "asset_code": "USDC",
-            "asset_issuer": "ISSUER",
-            "amount": "12.50"
-        });
-        assert!(payment_matches_invoice(&record, "astro_deadbeef", &invoice));
+        let case = horizon_payment_cases()
+            .into_iter()
+            .find(|case| case.name == "account_field_destination_fallback")
+            .expect("account_field_destination_fallback fixture");
+        assert!(payment_matches_invoice(&case.payment, case.memo, &invoice));
+    }
+
+    #[test]
+    fn horizon_payment_fixtures_match_expected_outcomes() {
+        let invoice = sample_invoice();
+        for case in horizon_payment_cases() {
+            assert_eq!(
+                payment_matches_invoice(&case.payment, case.memo, &invoice),
+                case.expected_match,
+                "fixture expectation mismatch: {}",
+                case.name
+            );
+        }
     }
 
     // --- Issue #157: settlement memo strategy ---

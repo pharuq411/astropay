@@ -3,6 +3,8 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+#[cfg(test)]
+mod horizon_fixtures;
 mod login_rate_limit;
 mod models;
 mod money_state;
