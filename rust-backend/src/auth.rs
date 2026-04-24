@@ -252,6 +252,8 @@ mod tests {
             login_rate_ip_max: 80,
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
+            reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 0,
         }
     }
 
@@ -278,6 +280,8 @@ mod tests {
             login_rate_ip_max: 80,
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
+            reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 0,
         }
     }
 
@@ -357,7 +361,6 @@ mod tests {
             header::AUTHORIZATION,
             HeaderValue::from_static("Bearer mysecret"),
         );
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer mysecret"));
         assert!(authorize_cron_request("mysecret", &headers).is_ok());
     }
 
@@ -371,54 +374,12 @@ mod tests {
         assert!(authorize_cron_request("cron_secret", &headers).is_err());
     }
 
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer wrong"));
-        assert!(authorize_cron_request("cron_secret", &headers).is_err());
-    }
-
     #[test]
     fn authorize_cron_rejects_when_secret_not_configured() {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer anything"));
         assert!(authorize_cron_request("", &headers).is_err());
     }
-
-    #[test]
-    fn authorize_cron_rejects_missing_header() {
-        assert!(authorize_cron_request("secret", &HeaderMap::new()).is_err());
-    }
-
-    // --- wallet key conflict ---
-
-    #[test]
-    fn authorize_cron_rejects_empty_configured_secret() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer mysecret"),
-        );
-        assert!(authorize_cron_request("mysecret", &headers).is_ok());
-    }
-
-    #[test]
-    fn authorize_cron_rejects_missing_header() {
-        assert!(authorize_cron_request("secret", &HeaderMap::new()).is_err());
-    }
-
-    // --- wallet key conflict ---
-
-    #[test]
-    fn authorize_cron_rejects_missing_header() {
-        assert!(authorize_cron_request("secret", &HeaderMap::new()).is_err());
-    }
-
-    // --- wallet key conflict ---
-
-    #[test]
-    fn authorize_cron_rejects_missing_header() {
-        assert!(authorize_cron_request("secret", &HeaderMap::new()).is_err());
-    }
-
-    // --- wallet key conflict ---
 
     #[test]
     fn authorize_cron_rejects_missing_header() {

@@ -3,7 +3,6 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::{
-    AppState, auth::authorize_cron_request, error::AppError, models::StellarWebhookRequest,
     AppState,
     auth::authorize_cron_request,
     error::AppError,

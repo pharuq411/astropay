@@ -355,6 +355,8 @@ mod tests {
             login_rate_ip_max: 80,
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
+            reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 0,
         }
     }
 
