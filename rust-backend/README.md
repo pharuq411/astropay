@@ -12,6 +12,12 @@ What it currently owns:
 
 Reconciliation and the Stellar webhook validate each merchant `settlement_public_key` with Stellar strkey decoding before inserting into `payouts`. Invalid keys skip payout queueing (invoice still marked paid) and emit a `payment_events` row with `event_type = payout_skipped_invalid_destination`. Run `cargo test` for strkey coverage.
 
+## Horizon payment fixtures
+
+Reusable synthetic Horizon payment payloads live in `src/horizon_fixtures.rs`. They cover good matches, bad matches, and ambiguous same-amount/same-destination cases where the transaction memo must disambiguate the invoice. The fixtures deliberately use synthetic transaction hashes and safe public test strings, not live payment data.
+
+**Verify:** `cargo test horizon_payment` exercises the fixture library through the Rust reconciliation matching logic.
+
 What is intentionally not faked yet:
 
 - buyer XDR generation/submission for checkout

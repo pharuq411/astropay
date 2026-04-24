@@ -3,6 +3,8 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+#[cfg(test)]
+mod horizon_fixtures;
 mod login_rate_limit;
 mod models;
 mod settle;
@@ -69,7 +71,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/cron/reconcile", get(handlers::cron::reconcile))
         .route("/api/cron/settle", get(handlers::cron::settle))
-        .route("/api/cron/purge-sessions", get(handlers::cron::purge_sessions))
+        .route(
+            "/api/cron/purge-sessions",
+            get(handlers::cron::purge_sessions),
+        )
         .route(
             "/api/webhooks/stellar",
             post(handlers::misc::stellar_webhook),
