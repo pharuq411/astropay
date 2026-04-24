@@ -253,6 +253,8 @@ mod tests {
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
             reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 24,
+            archive_retention_days: 30,
             reconcile_scan_window_hours: 0,
         }
     }
@@ -281,6 +283,8 @@ mod tests {
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
             reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 24,
+            archive_retention_days: 30,
             reconcile_scan_window_hours: 0,
         }
     }
@@ -379,6 +383,23 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer anything"));
         assert!(authorize_cron_request("", &headers).is_err());
+    }
+
+    #[test]
+    fn authorize_cron_rejects_missing_header() {
+        assert!(authorize_cron_request("secret", &HeaderMap::new()).is_err());
+    }
+
+    // --- wallet key conflict ---
+
+    #[test]
+    fn authorize_cron_rejects_empty_configured_secret() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer mysecret"),
+        );
+        assert!(authorize_cron_request("mysecret", &headers).is_ok());
     }
 
     #[test]

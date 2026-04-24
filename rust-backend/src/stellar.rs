@@ -58,7 +58,7 @@ pub struct PaymentMatch {
 }
 
 /// Emitted when a payment's amount matches an invoice but the asset differs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AssetMismatch {
     pub hash: String,
     pub received_asset_code: String,
@@ -68,11 +68,40 @@ pub struct AssetMismatch {
     pub amount: String,
 }
 
+#[derive(Debug)]
+pub enum TransactionStatus {
+    Success,
+    Failed,
+    NotFound,
+}
+
 /// Result of scanning Horizon payments for an invoice.
 pub enum PaymentScanResult {
     Match(PaymentMatch),
     AssetMismatch(AssetMismatch),
     NotFound,
+}
+
+/// Verifies if a transaction hash has been successfully committed on-chain.
+pub async fn confirm_transaction(
+    config: &Config,
+    tx_hash: &str,
+) -> Result<TransactionStatus, AppError> {
+    let url = format!(
+        "{}/transactions/{}",
+        config.horizon_url.trim_end_matches('/'),
+        tx_hash
+    );
+    let resp = Client::new().get(url).send().await.map_err(|_| AppError::Internal)?;
+    if resp.status() == 404 {
+        return Ok(TransactionStatus::NotFound);
+    }
+    let tx: serde_json::Value = resp.json().await.map_err(|_| AppError::Internal)?;
+    if tx.get("successful").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(TransactionStatus::Success)
+    } else {
+        Ok(TransactionStatus::Failed)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,6 +385,8 @@ mod tests {
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
             reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 24,
+            archive_retention_days: 30,
             reconcile_scan_window_hours: 0,
         }
     }
