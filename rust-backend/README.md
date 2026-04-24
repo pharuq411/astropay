@@ -197,6 +197,28 @@ The runner aborts with a clear error if that directory is missing (for example w
 
 **Verification:** `cargo test` (includes a guard that migration 002 defines the expected index names). With Postgres available, run `migrate` then inspect indexes, for example `psql "$DATABASE_URL" -c '\d sessions'`.
 
+## Treasury key custody
+
+`PLATFORM_TREASURY_SECRET_KEY` is the Ed25519 secret key that signs all
+outbound settlement transactions. It must never appear in logs, API
+responses, or the browser bundle.
+
+Full storage, rotation, and verification requirements are documented in
+[`docs/treasury-key-custody.md`](../docs/treasury-key-custody.md).
+
+**Quick rules:**
+- Load via `config.platform_treasury_secret_key` (`Option<String>`). A
+  missing key is not a startup error — settlement routes must check and
+  fail fast before signing.
+- Never log the value. Never include it in a JSON response.
+- Rotate when a team member with access leaves, when a leak is suspected,
+  or on a 90-day schedule for mainnet.
+- Update `PLATFORM_TREASURY_PUBLIC_KEY` and `PLATFORM_TREASURY_SECRET_KEY`
+  in the same deploy — a mismatch causes every settlement to fail.
+
+**Verify:** `cargo test` uses `platform_treasury_secret_key: None` in all
+fixtures, confirming the service boots and tests pass without a real key.
+
 ## Run locally
 
 ```bash
