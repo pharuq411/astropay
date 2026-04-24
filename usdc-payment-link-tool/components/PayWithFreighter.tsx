@@ -10,6 +10,26 @@ type Props = { invoiceId: string; status: string };
 
 type FailureState = { message: string; stage: CheckoutFailureStage };
 
+/** Distinct progress states for the Freighter checkout flow. */
+type TxStep =
+  | 'idle'
+  | 'connecting'    // requesting Freighter access
+  | 'building'      // POST build-xdr in flight
+  | 'signing'       // waiting for Freighter signature
+  | 'submitting'    // POST submit-xdr in flight
+  | 'confirmed'     // submission accepted; polling for on-chain confirmation
+  | 'failed';       // terminal error
+
+const TX_STEP_LABEL: Record<TxStep, string> = {
+  idle: 'Pay now',
+  connecting: 'Connecting…',
+  building: 'Building transaction…',
+  signing: 'Waiting for signature…',
+  submitting: 'Submitting…',
+  confirmed: 'Submitted — confirming…',
+  failed: 'Failed',
+};
+
 async function readJsonBody(res: Response): Promise<Record<string, unknown>> {
   const text = await res.text();
   if (!text) return {};
@@ -25,6 +45,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
   const [status, setStatus] = useState(initialStatus);
   const [failure, setFailure] = useState<FailureState | null>(null);
   const [loading, setLoading] = useState(false);
+  const [txStep, setTxStep] = useState<TxStep>('idle');
 
   const failureView = useMemo(
     () => (failure ? resolveCheckoutFailure(failure.message, failure.stage) : null),
@@ -49,9 +70,11 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
 
   async function connect(): Promise<string> {
     setFailure(null);
+    setTxStep('connecting');
     try {
       const connected = await isConnected();
       if (!connected.isConnected) {
+        setTxStep('failed');
         setFailure({ message: 'Freighter is not connected in this browser.', stage: 'wallet' });
         return '';
       }
@@ -59,15 +82,18 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       if ('address' in res && res.address) {
         setAddress(res.address);
         setFailure(null);
+        setTxStep('idle');
         return res.address;
       }
       const message =
         'error' in res && res.error
           ? String((res as { error?: { message?: string } }).error?.message || res.error)
           : 'Unable to access Freighter';
+      setTxStep('failed');
       setFailure({ message, stage: 'wallet' });
       return '';
     } catch (e) {
+      setTxStep('failed');
       setFailure({
         message: e instanceof Error ? e.message : 'Unable to reach Freighter',
         stage: 'wallet',
@@ -79,6 +105,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
   async function pay() {
     setLoading(true);
     setFailure(null);
+    setTxStep('idle');
     try {
       const payer = address || (await connect());
       if (!payer) {
@@ -86,6 +113,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
         return;
       }
 
+      setTxStep('building');
       const buildRes = await fetch(`/api/invoices/${invoiceId}/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,6 +121,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       });
       const buildData = await readJsonBody(buildRes);
       if (!buildRes.ok) {
+        setTxStep('failed');
         setFailure({
           message: typeof buildData.error === 'string' ? buildData.error : 'Failed to build transaction',
           stage: 'build',
@@ -104,15 +133,18 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       const passphrase =
         typeof buildData.networkPassphrase === 'string' ? buildData.networkPassphrase : '';
       if (!xdr || !passphrase) {
+        setTxStep('failed');
         setFailure({ message: 'Checkout response was missing transaction data.', stage: 'build' });
         return;
       }
 
+      setTxStep('signing');
       let signedXdr = '';
       try {
         const signed = await signTransaction(xdr, { networkPassphrase: passphrase });
         signedXdr = 'signedTxXdr' in signed ? signed.signedTxXdr : '';
       } catch (e) {
+        setTxStep('failed');
         setFailure({
           message: e instanceof Error ? e.message : 'Freighter could not sign the transaction',
           stage: 'wallet',
@@ -121,10 +153,12 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       }
 
       if (!signedXdr) {
+        setTxStep('failed');
         setFailure({ message: 'Freighter did not return a signed transaction', stage: 'wallet' });
         return;
       }
 
+      setTxStep('submitting');
       const submitRes = await fetch(`/api/invoices/${invoiceId}/checkout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -132,6 +166,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       });
       const submitData = await readJsonBody(submitRes);
       if (!submitRes.ok) {
+        setTxStep('failed');
         setFailure({
           message: typeof submitData.error === 'string' ? submitData.error : 'Failed to submit transaction',
           stage: 'submit',
@@ -139,8 +174,10 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
         return;
       }
 
+      setTxStep('confirmed');
       setStatus('processing');
     } catch (e) {
+      setTxStep('failed');
       setFailure({
         message: e instanceof Error ? e.message : 'Payment failed',
         stage: 'build',
@@ -156,6 +193,9 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
       <p className="muted">
         Status: <strong>{status}</strong>
       </p>
+      {txStep !== 'idle' && txStep !== 'failed' && (
+        <p className="muted small">{TX_STEP_LABEL[txStep]}</p>
+      )}
       <div className="row">
         <button type="button" className="button secondary" onClick={() => void connect()}>
           Connect Freighter
@@ -166,18 +206,22 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
           onClick={() => void pay()}
           disabled={loading || ['paid', 'settled', 'expired'].includes(status)}
         >
-          {loading ? 'Processing...' : 'Pay now'}
+          {loading ? TX_STEP_LABEL[txStep] : 'Pay now'}
         </button>
       </div>
-      {address ? <p className="muted">Payer: <span className="mono">{address}</span></p> : null}
-      <PendingSettlementBanner status={status} />
       {address ? (
         <p className="muted">
           Payer: <span className="mono">{address}</span>
         </p>
       ) : null}
-      {failureView ? <PaymentFailurePanel view={failureView} onDismiss={() => setFailure(null)} onRetry={failure?.stage === 'wallet' ? () => void connect() : () => void pay()} /> : null}
-      {failureView ? <PaymentFailurePanel view={failureView} onDismiss={() => setFailure(null)} /> : null}
+      <PendingSettlementBanner status={status} />
+      {failureView ? (
+        <PaymentFailurePanel
+          view={failureView}
+          onDismiss={() => setFailure(null)}
+          onRetry={failure?.stage === 'wallet' ? () => void connect() : () => void pay()}
+        />
+      ) : null}
     </div>
   );
 }

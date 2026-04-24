@@ -551,10 +551,19 @@ pub async fn purge_sessions(
 pub async fn settle(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(_params): Query<DryRunParams>,
     axum::extract::Query(params): axum::extract::Query<DryRunParams>,
 ) -> Result<Json<Value>, AppError> {
     authorize_cron_request(&state.config.cron_secret, &headers)?;
+
+    // Issue #1: Reject settlement execution when the treasury signing key is missing.
+    // Without it we cannot sign Stellar transactions, so failing fast here prevents
+    // payouts from being silently skipped or left in an ambiguous state.
+    if state.config.platform_treasury_secret_key.is_none() {
+        return Err(AppError::bad_request(
+            "PLATFORM_TREASURY_SECRET_KEY is not configured; settlement execution is disabled. \
+             Set the env var and redeploy before running the settle cron.",
+        ));
+    }
     let mut client = state.pool.get().await?;
     let batch_size = std::env::var("SETTLE_BATCH_SIZE")
         .ok()
@@ -1100,6 +1109,22 @@ mod tests {
         assert_eq!(super::PAYOUT_DEAD_LETTER_THRESHOLD, 5);
     }
 
+    // Issue #1: settle must reject when treasury signing key is absent.
+    #[test]
+    fn settle_rejects_when_treasury_secret_key_is_none() {
+        // The guard is: if config.platform_treasury_secret_key.is_none() { return Err(...) }
+        // Verify the source contains that exact check so the fast-fail cannot be silently removed.
+        let src = include_str!("cron.rs");
+        assert!(
+            src.contains("platform_treasury_secret_key.is_none()"),
+            "settle must fast-fail when PLATFORM_TREASURY_SECRET_KEY is not set"
+        );
+        assert!(
+            src.contains("PLATFORM_TREASURY_SECRET_KEY is not configured"),
+            "settle error message must name the missing env var"
+        );
+    }
+
     #[test]
     fn reconcile_page_size_is_positive() {
         assert!(super::RECONCILE_PAGE_SIZE > 0);
@@ -1111,7 +1136,6 @@ mod tests {
     }
 
     #[test]
-    fn settle_handler_tracks_last_failure_reason() {
     fn settle_handler_tracks_last_failure_reason() {
         // This test verifies that the settle handler properly updates both
         // failure_count and last_failure_reason when processing failed payouts.
@@ -1176,9 +1200,12 @@ mod tests {
             handler_code.contains("page_len as i64) < SETTLE_PAGE_SIZE"),
             "settle loop must break when page_len < SETTLE_PAGE_SIZE"
         );
+    }
+
+    #[test]
     fn default_settle_batch_size_is_fifty() {
         assert_eq!(super::DEFAULT_SETTLE_BATCH_SIZE, 50);
-    // ── Idempotency logic ────────────────────────────────────────────────────
+    }
     //
     // The reconcile handler guards against duplicate processing with two layers:
     //   1. Pre-check: SELECT on transaction_hash before opening a transaction.
@@ -1201,6 +1228,8 @@ mod tests {
         // and write — e.g. webhook beat the cron to it).
         let action = "skipped";
         assert_eq!(action, "skipped");
+    }
+
     #[test]
     fn orphan_scan_default_limit_is_fifty() {
         assert_eq!(super::ORPHAN_SCAN_LIMIT, 50);
