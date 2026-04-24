@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isConnected, requestAccess, signTransaction } from '@stellar/freighter-api';
 import { PendingSettlementBanner } from './PendingSettlementBanner';
 import { PaymentFailurePanel } from '@/components/PaymentFailurePanel';
@@ -103,13 +103,15 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
   }
 
   async function pay() {
+    // Synchronous ref guard prevents duplicate submissions from rapid/repeated clicks.
+    if (inFlight.current) return;
+    inFlight.current = true;
     setLoading(true);
     setFailure(null);
     setTxStep('idle');
     try {
       const payer = address || (await connect());
       if (!payer) {
-        setLoading(false);
         return;
       }
 
@@ -183,6 +185,7 @@ export function PayWithFreighter({ invoiceId, status: initialStatus }: Props) {
         stage: 'build',
       });
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   }

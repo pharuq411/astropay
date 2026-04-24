@@ -227,7 +227,7 @@ mod tests {
         authorize_cron_request, generate_memo, generate_public_id, hash_password_with_params,
         session_cookie, verify_password, wallet_keys_conflict_with_existing,
     };
-    use crate::config::Config;
+    use crate::config::{Config, LogFormat};
 
     fn secure_config() -> Config {
         Config {

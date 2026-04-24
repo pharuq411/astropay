@@ -54,9 +54,22 @@ export type AssetMismatch = {
   amount: string;
 };
 
+// Issue #172
+export type MemoMismatch = {
+  hash: string;
+  receivedMemo: string | null;
+  expectedMemo: string;
+};
+
+export type PaymentScanResult =
+  | { hash: string; payment: any; memo: string }
+  | { assetMismatch: AssetMismatch }
+  | { memoMismatch: MemoMismatch }
+  | null;
+
 export const findPaymentForInvoice = async (
   invoice: Invoice,
-): Promise<{ hash: string; payment: any; memo: string; assetMismatch?: never } | { assetMismatch: AssetMismatch } | null> => {
+): Promise<PaymentScanResult> => {
   const expectedAmount = invoiceAmountToAsset(invoice);
   const page = await getServer().payments().forAccount(invoice.destination_public_key).order('desc').limit(50).call();
   for (const record of page.records as any[]) {
@@ -81,6 +94,14 @@ export const findPaymentForInvoice = async (
     if (tx.memo === invoice.memo) {
       return { hash: record.transaction_hash, payment: record, memo: tx.memo };
     }
+    // Issue #172: destination + asset + amount match but memo is wrong/missing.
+    return {
+      memoMismatch: {
+        hash: record.transaction_hash,
+        receivedMemo: tx.memo ?? null,
+        expectedMemo: invoice.memo,
+      },
+    };
   }
   return null;
 };
@@ -95,6 +116,26 @@ export const SETTLEMENT_MEMO_MAX_BYTES = 28;
  */
 export const buildSettlementMemo = (publicId: string): string =>
   `s:${publicId}`.slice(0, SETTLEMENT_MEMO_MAX_BYTES);
+
+/**
+ * Checks whether a submitted Stellar transaction has been confirmed on-chain.
+ *
+ * Returns:
+ *   'confirmed' — transaction succeeded on Stellar
+ *   'failed'    — transaction was included in a ledger but failed
+ *   'pending'   — transaction not yet found in Horizon (still propagating)
+ *
+ * Throws on unexpected network errors so callers can surface them.
+ */
+export const checkPayoutTxConfirmed = async (txHash: string): Promise<'confirmed' | 'failed' | 'pending'> => {
+  try {
+    const tx = await getServer().transactions().transaction(txHash).call();
+    return tx.successful ? 'confirmed' : 'failed';
+  } catch (err: any) {
+    if (err?.response?.status === 404) return 'pending';
+    throw err;
+  }
+};
 
 export const buildSettlementXdr = async ({ invoice, destination }: { invoice: Invoice; destination: string }) => {
   if (!env.platformTreasurySecretKey) throw new Error('Settlement signing key is missing');

@@ -120,6 +120,54 @@ describe('findPaymentForInvoice', () => {
     }
   });
 
+  it('returns memoMismatch when destination+asset+amount match but memo is wrong', async () => {
+    mockPaymentsCall.mockResolvedValue({
+      records: [
+        {
+          type: 'payment',
+          to: 'DEST_KEY',
+          asset_code: 'USDC',
+          asset_issuer: 'ISSUER_A',
+          amount: '10.00',
+          transaction_hash: 'tx_hash_3',
+        },
+      ],
+    });
+    mockTransactionCall.mockResolvedValue({ memo: 'wrong_memo' });
+
+    const { findPaymentForInvoice } = await import('@/lib/stellar');
+    const result = await findPaymentForInvoice(BASE_INVOICE);
+
+    expect(result).not.toBeNull();
+    expect(result).toHaveProperty('memoMismatch');
+    if (result && 'memoMismatch' in result) {
+      expect(result.memoMismatch.receivedMemo).toBe('wrong_memo');
+      expect(result.memoMismatch.expectedMemo).toBe('astro_deadbeef');
+      expect(result.memoMismatch.hash).toBe('tx_hash_3');
+    }
+  });
+
+  it('returns memoMismatch when memo is null/missing', async () => {
+    mockPaymentsCall.mockResolvedValue({
+      records: [
+        {
+          type: 'payment',
+          to: 'DEST_KEY',
+          asset_code: 'USDC',
+          asset_issuer: 'ISSUER_A',
+          amount: '10.00',
+          transaction_hash: 'tx_hash_4',
+        },
+      ],
+    });
+    mockTransactionCall.mockResolvedValue({ memo: undefined });
+
+    const { findPaymentForInvoice } = await import('@/lib/stellar');
+    const result = await findPaymentForInvoice(BASE_INVOICE);
+
+    expect(result).toHaveProperty('memoMismatch');
+  });
+
   it('returns null when no matching payment found', async () => {
     mockPaymentsCall.mockResolvedValue({ records: [] });
     const { findPaymentForInvoice } = await import('@/lib/stellar');
@@ -152,3 +200,36 @@ describe('findPaymentForInvoice', () => {
     }
   });
 });
+
+// --- AP-149: checkPayoutTxConfirmed ---
+
+describe('checkPayoutTxConfirmed', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns "confirmed" when Horizon reports a successful transaction', async () => {
+    mockTransactionCall.mockResolvedValue({ successful: true });
+    const { checkPayoutTxConfirmed } = await import('@/lib/stellar');
+    expect(await checkPayoutTxConfirmed('hash_abc')).toBe('confirmed');
+  });
+
+  it('returns "failed" when Horizon reports an unsuccessful transaction', async () => {
+    mockTransactionCall.mockResolvedValue({ successful: false });
+    const { checkPayoutTxConfirmed } = await import('@/lib/stellar');
+    expect(await checkPayoutTxConfirmed('hash_abc')).toBe('failed');
+  });
+
+  it('returns "pending" when Horizon returns 404', async () => {
+    mockTransactionCall.mockRejectedValue({ response: { status: 404 } });
+    const { checkPayoutTxConfirmed } = await import('@/lib/stellar');
+    expect(await checkPayoutTxConfirmed('hash_abc')).toBe('pending');
+  });
+
+  it('re-throws unexpected network errors', async () => {
+    mockTransactionCall.mockRejectedValue(new Error('Network timeout'));
+    const { checkPayoutTxConfirmed } = await import('@/lib/stellar');
+    await expect(checkPayoutTxConfirmed('hash_abc')).rejects.toThrow('Network timeout');
+  });
+});
+

@@ -58,7 +58,7 @@ pub struct PaymentMatch {
 }
 
 /// Emitted when a payment's amount matches an invoice but the asset differs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AssetMismatch {
     pub hash: String,
     pub received_asset_code: String,
@@ -68,11 +68,47 @@ pub struct AssetMismatch {
     pub amount: String,
 }
 
+/// Issue #172: emitted when destination + asset + amount match but memo is missing or wrong.
+#[derive(Debug, Clone)]
+pub struct MemoMismatch {
+    pub hash: String,
+    pub received_memo: String,
+    pub expected_memo: String,
+#[derive(Debug)]
+pub enum TransactionStatus {
+    Success,
+    Failed,
+    NotFound,
+}
+
 /// Result of scanning Horizon payments for an invoice.
 pub enum PaymentScanResult {
     Match(PaymentMatch),
     AssetMismatch(AssetMismatch),
+    MemoMismatch(MemoMismatch),
     NotFound,
+}
+
+/// Verifies if a transaction hash has been successfully committed on-chain.
+pub async fn confirm_transaction(
+    config: &Config,
+    tx_hash: &str,
+) -> Result<TransactionStatus, AppError> {
+    let url = format!(
+        "{}/transactions/{}",
+        config.horizon_url.trim_end_matches('/'),
+        tx_hash
+    );
+    let resp = Client::new().get(url).send().await.map_err(|_| AppError::Internal)?;
+    if resp.status() == 404 {
+        return Ok(TransactionStatus::NotFound);
+    }
+    let tx: serde_json::Value = resp.json().await.map_err(|_| AppError::Internal)?;
+    if tx.get("successful").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(TransactionStatus::Success)
+    } else {
+        Ok(TransactionStatus::Failed)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,6 +256,12 @@ pub async fn find_payment_for_invoice(
                 memo: tx.memo,
             }));
         }
+        // Issue #172: destination + asset + amount match but memo is wrong/missing.
+        return Ok(PaymentScanResult::MemoMismatch(MemoMismatch {
+            hash: record.transaction_hash,
+            received_memo: tx.memo,
+            expected_memo: invoice.memo.clone(),
+        }));
     }
 
     Ok(PaymentScanResult::NotFound)
@@ -294,7 +336,7 @@ mod tests {
         is_valid_account_public_key, payment_matches_invoice,
     };
     use crate::{
-        config::Config,
+        config::{Config, LogFormat},
         horizon_fixtures::{
             ASSET_CODE, ASSET_ISSUER, DESTINATION_ACCOUNT, INVOICE_AMOUNT, INVOICE_MEMO,
             horizon_payment_cases,
@@ -355,6 +397,12 @@ mod tests {
             login_rate_ip_max: 80,
             login_rate_email_window_secs: 900,
             login_rate_email_fail_max: 12,
+            reconcile_scan_limit: 100,
+            reconcile_scan_window_hours: 0,
+            log_format: LogFormat::Human,
+            reconcile_scan_window_hours: 24,
+            archive_retention_days: 30,
+            reconcile_scan_window_hours: 0,
         }
     }
 
@@ -426,6 +474,31 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    // --- Issue #172: memo mismatch detection ---
+
+    #[test]
+    fn memo_mismatch_struct_holds_expected_fields() {
+        let m = super::MemoMismatch {
+            hash: "abc".to_string(),
+            received_memo: "wrong".to_string(),
+            expected_memo: "astro_abc".to_string(),
+        };
+        assert_eq!(m.hash, "abc");
+        assert_eq!(m.received_memo, "wrong");
+        assert_eq!(m.expected_memo, "astro_abc");
+    }
+
+    #[test]
+    fn payment_scan_result_has_memo_mismatch_variant() {
+        // Verify the variant compiles and can be matched.
+        let result = super::PaymentScanResult::MemoMismatch(super::MemoMismatch {
+            hash: "h".to_string(),
+            received_memo: "r".to_string(),
+            expected_memo: "e".to_string(),
+        });
+        assert!(matches!(result, super::PaymentScanResult::MemoMismatch(_)));
     }
 
     // --- Issue #157: settlement memo strategy ---
