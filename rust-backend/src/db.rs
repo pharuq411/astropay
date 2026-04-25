@@ -97,6 +97,27 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn invoice_paid_at_not_before_created_at_migration_defines_check_constraint() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/017_invoice_paid_at_not_before_created_at.sql");
+        let sql = std::fs::read_to_string(path)
+            .expect("read 017_invoice_paid_at_not_before_created_at.sql");
+        assert!(sql.contains("ALTER TABLE invoices"), "must alter invoices table");
+        assert!(
+            sql.contains("invoices_paid_at_after_created_at_check"),
+            "must name the constraint"
+        );
+        assert!(
+            sql.contains("paid_at >= created_at"),
+            "must enforce paid_at >= created_at"
+        );
+        assert!(
+            sql.contains("paid_at IS NULL"),
+            "constraint must be nullable-safe"
+        );
+    }
+
+    #[test]
     fn invoice_settled_after_paid_migration_defines_check_constraint() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../usdc-payment-link-tool/migrations/015_invoice_settled_after_paid_check.sql");
