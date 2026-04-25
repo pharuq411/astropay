@@ -9,6 +9,7 @@ mod logging;
 mod login_rate_limit;
 mod models;
 mod money_state;
+pub mod redact;
 mod settle;
 mod stellar;
 
@@ -39,6 +40,17 @@ async fn main() -> anyhow::Result<()> {
     load_env_files();
     let config = Config::from_env()?;
     logging::init_tracing(config.log_format);
+
+    // Sentry is optional: no-ops when SENTRY_DSN is absent.
+    let _sentry_guard = sentry::init(sentry::ClientOptions {
+        dsn: std::env::var("SENTRY_DSN").ok().and_then(|s| s.parse().ok()),
+        environment: std::env::var("SENTRY_ENVIRONMENT")
+            .ok()
+            .map(std::borrow::Cow::Owned),
+        release: sentry::release_name!(),
+        traces_sample_rate: if cfg!(debug_assertions) { 1.0 } else { 0.2 },
+        ..Default::default()
+    });
 
     let pool = create_pool(&config)?;
     let login_limiter = LoginRateLimiter::from_config(&config);
@@ -77,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cron/archive", get(handlers::cron::archive))
         .route("/api/cron/payouts/:payout_id/replay", axum::routing::post(handlers::cron::replay_payout))
         .route("/api/cron/orphan-payments", get(handlers::cron::orphan_payments))
+        .route("/api/cron/payout-health", get(handlers::cron::payout_health))
         .route(
             "/api/webhooks/stellar",
             post(handlers::misc::stellar_webhook),
@@ -93,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         bind_addr = %config.bind_addr,
         log_format = config.log_format.as_str(),
+        database_url = %crate::redact::redact_connection_string(config.database_url.inner()),
         "rust backend listening"
     );
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;

@@ -42,8 +42,38 @@ use tokio_postgres::Config as PgConfig;
 
 use crate::config::Config;
 
+/// Valid PostgreSQL SSL modes
+const VALID_SSL_MODES: &[&str] = &[
+    "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+];
+
+/// Validates PGSSL configuration at startup
+pub fn validate_ssl_mode(ssl_mode: &str) -> anyhow::Result<()> {
+    if !VALID_SSL_MODES.contains(&ssl_mode) {
+        anyhow::bail!(
+            "Invalid PGSSL mode '{}'. Valid modes are: {}",
+            ssl_mode,
+            VALID_SSL_MODES.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Snapshot of payout queue health returned by [`payout_queue_stats`].
+#[derive(Debug, serde::Serialize)]
+pub struct PayoutQueueStats {
+    pub queued: i64,
+    pub failed: i64,
+    pub dead_lettered: i64,
+    /// Age in seconds of the oldest queued payout, or `None` when the queue is empty.
+    pub oldest_queued_age_secs: Option<i64>,
+}
+
 pub fn create_pool(config: &Config) -> anyhow::Result<Pool> {
-    let pg = config.database_url.parse::<PgConfig>()?;
+    // Validate SSL mode early
+    validate_ssl_mode(&config.pgssl)?;
+    
+    let pg = config.database_url.inner().parse::<PgConfig>()?;
     let manager_config = ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
     };
@@ -52,6 +82,68 @@ pub fn create_pool(config: &Config) -> anyhow::Result<Pool> {
         .runtime(Runtime::Tokio1)
         .max_size(16)
         .build()?)
+}
+
+/// Attempts to claim a payout for processing by setting worker_id and timestamp.
+/// Returns true if successfully claimed, false if already claimed by another worker.
+pub async fn claim_payout_for_processing(
+    client: &deadpool_postgres::Client,
+    payout_id: uuid::Uuid,
+    worker_id: &str,
+) -> Result<bool, tokio_postgres::Error> {
+    let rows_affected = client
+        .execute(
+            "UPDATE payouts 
+             SET processing_worker_id = $1, processing_started_at = NOW(), updated_at = NOW()
+             WHERE id = $2 AND status = 'queued' AND processing_worker_id IS NULL",
+            &[&worker_id, &payout_id],
+        )
+        .await?;
+    Ok(rows_affected > 0)
+}
+
+/// Releases a payout from processing (clears worker_id and timestamp).
+pub async fn release_payout_from_processing(
+    client: &deadpool_postgres::Client,
+    payout_id: uuid::Uuid,
+) -> Result<(), tokio_postgres::Error> {
+    client
+        .execute(
+            "UPDATE payouts 
+             SET processing_worker_id = NULL, processing_started_at = NULL, updated_at = NOW()
+             WHERE id = $1",
+            &[&payout_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Returns a point-in-time snapshot of payout queue health.
+///
+/// All three counts and the oldest-queued age are fetched in a single query to
+/// avoid TOCTOU skew between separate reads.
+pub async fn payout_queue_stats(
+    client: &deadpool_postgres::Client,
+) -> Result<PayoutQueueStats, tokio_postgres::Error> {
+    let row = client
+        .query_one(
+            "SELECT
+               COUNT(*) FILTER (WHERE p.status = 'queued')                          AS queued,
+               COUNT(*) FILTER (WHERE p.status = 'failed')                          AS failed,
+               (SELECT COUNT(*) FROM payout_dead_letters)                            AS dead_lettered,
+               EXTRACT(EPOCH FROM (NOW() - MIN(p.created_at) FILTER (WHERE p.status = 'queued')))::bigint
+                                                                                     AS oldest_queued_age_secs
+             FROM payouts p",
+            &[],
+        )
+        .await?;
+
+    Ok(PayoutQueueStats {
+        queued: row.get::<_, i64>("queued"),
+        failed: row.get::<_, i64>("failed"),
+        dead_lettered: row.get::<_, i64>("dead_lettered"),
+        oldest_queued_age_secs: row.get("oldest_queued_age_secs"),
+    })
 }
 
 #[cfg(test)]
@@ -79,6 +171,59 @@ mod tests {
         assert!(sql.contains("payment_events_created_at_idx"));
         assert!(sql.contains("ON payment_events (created_at ASC)"));
         assert!(sql.contains("CREATE INDEX IF NOT EXISTS"));
+    fn invoice_paid_at_not_before_created_at_migration_defines_check_constraint() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/017_invoice_paid_at_not_before_created_at.sql");
+        let sql = std::fs::read_to_string(path)
+            .expect("read 017_invoice_paid_at_not_before_created_at.sql");
+        assert!(sql.contains("ALTER TABLE invoices"), "must alter invoices table");
+        assert!(
+            sql.contains("invoices_paid_at_after_created_at_check"),
+            "must name the constraint"
+        );
+        assert!(
+            sql.contains("paid_at >= created_at"),
+            "must enforce paid_at >= created_at"
+        );
+        assert!(
+            sql.contains("paid_at IS NULL"),
+            "constraint must be nullable-safe"
+        );
+    }
+
+    #[test]
+    fn invoice_settled_after_paid_migration_defines_check_constraint() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/015_invoice_settled_after_paid_check.sql");
+        let sql = std::fs::read_to_string(path).expect("read 015_invoice_settled_after_paid_check.sql");
+        assert!(sql.contains("ALTER TABLE invoices"), "must alter invoices table");
+        assert!(sql.contains("invoices_settled_after_paid_check"), "must name the constraint");
+        assert!(sql.contains("settled_at >= paid_at"), "must enforce settled_at >= paid_at");
+    }
+
+    #[test]
+    fn webhook_deliveries_audit_migration_defines_table_and_indexes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/014_webhook_deliveries_audit.sql");
+        let sql = std::fs::read_to_string(path).expect("read 014_webhook_deliveries_audit.sql");
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS webhook_deliveries_audit"));
+        assert!(sql.contains("delivery_id    TEXT    NOT NULL UNIQUE"));
+        assert!(sql.contains("CHECK (status IN ('received', 'processed', 'failed', 'duplicate'))"));
+        assert!(sql.contains("webhook_deliveries_audit_source_received_at_idx"));
+        assert!(sql.contains("webhook_deliveries_audit_status_received_at_idx"));
+        assert!(sql.contains("replay_of"));
+        assert!(sql.contains("invoice_id"));
+    }
+
+    #[test]
+    fn merchant_email_citext_migration_alters_column_and_rebuilds_constraint() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/013_merchant_email_citext.sql");
+        let sql = std::fs::read_to_string(path).expect("read 013_merchant_email_citext.sql");
+        assert!(sql.contains("CREATE EXTENSION IF NOT EXISTS citext"), "must enable citext");
+        assert!(sql.contains("ALTER COLUMN email TYPE citext"), "must retype email to citext");
+        assert!(sql.contains("DROP CONSTRAINT IF EXISTS merchants_email_key"), "must drop old constraint");
+        assert!(sql.contains("ADD CONSTRAINT merchants_email_key UNIQUE (email)"), "must re-add unique constraint");
     }
 
     #[test]
@@ -293,16 +438,46 @@ mod tests {
         );
     }
 
-    /// Pins the settle-cron query shape so a refactor that breaks partial-index
-    /// alignment is caught at compile time rather than at runtime.
     #[test]
-    fn settle_cron_queued_query_matches_partial_index() {
-        // This is the query the settle handler (or future settlement scan) must
-        // use to benefit from payouts_queued_created_at_idx.
-        let query =
-            "SELECT * FROM payouts WHERE status = 'queued' ORDER BY created_at ASC LIMIT 100";
-        assert!(query.contains("status = 'queued'"));
-        assert!(query.contains("ORDER BY created_at ASC"));
+    fn payout_row_locking_migration_adds_processing_columns() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/017_payout_row_locking.sql");
+        let sql = std::fs::read_to_string(path).expect("read 017_payout_row_locking.sql");
+        assert!(sql.contains("processing_worker_id TEXT"));
+        assert!(sql.contains("processing_started_at TIMESTAMPTZ"));
+        assert!(sql.contains("payouts_processing_worker_idx"));
+    }
+
+    #[test]
+    fn business_name_constraint_migration_prevents_empty_names() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/018_business_name_constraint.sql");
+        let sql = std::fs::read_to_string(path).expect("read 018_business_name_constraint.sql");
+        assert!(sql.contains("merchants_business_name_not_empty"));
+        assert!(sql.contains("LENGTH(TRIM(business_name)) > 0"));
+    }
+
+    #[test]
+    fn performance_fixtures_migration_creates_test_data() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/019_performance_test_fixtures.sql");
+        let sql = std::fs::read_to_string(path).expect("read 019_performance_test_fixtures.sql");
+        assert!(sql.contains("Performance test invoice"));
+        assert!(sql.contains("performance_test_summary"));
+        assert!(sql.contains("cleanup_performance_test_data"));
+    }
+
+    #[test]
+    fn ssl_mode_validation_rejects_invalid_modes() {
+        assert!(validate_ssl_mode("invalid").is_err());
+        assert!(validate_ssl_mode("random").is_err());
+    }
+
+    #[test]
+    fn ssl_mode_validation_accepts_valid_modes() {
+        for mode in ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] {
+            assert!(validate_ssl_mode(mode).is_ok());
+        }
     }
 }
 
@@ -344,5 +519,21 @@ mod checkout_attempt_tests {
                 "005 must not create a speculative index: {t}"
             );
         }
+    }
+
+    #[test]
+    fn invoice_public_id_format_migration_adds_check_constraint() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/016_invoice_public_id_format.sql");
+        let sql = std::fs::read_to_string(path).expect("read 016_invoice_public_id_format.sql");
+        assert!(sql.contains("ALTER TABLE invoices"), "must alter invoices table");
+        assert!(
+            sql.contains("invoices_public_id_format"),
+            "must name the constraint"
+        );
+        assert!(
+            sql.contains("inv_[0-9a-f]{16}"),
+            "must enforce inv_[0-9a-f]{{16}} pattern"
+        );
     }
 }

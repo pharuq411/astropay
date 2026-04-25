@@ -50,6 +50,9 @@ What is intentionally not faked yet:
 
 Those routes return `501 Not Implemented` in the Rust service until the Stellar transaction logic is ported properly.
 
+The tests, rollout gates, and rollback triggers required before Rust owns checkout are documented in
+[`docs/checkout-rust-cutover-checklist.md`](../docs/checkout-rust-cutover-checklist.md).
+
 ## Session cookie security
 
 The `Secure` flag on the `astropay_session` cookie is driven by `APP_URL`:
@@ -322,3 +325,64 @@ Migration `005_invoice_last_checkout_attempt_at.sql` adds a nullable `TIMESTAMPT
 **Apply:** `cargo run --bin migrate`
 
 **Verify:** `cargo test checkout_attempt` (guards that the column is nullable, is `TIMESTAMPTZ`, and that no speculative index was added).
+
+## Payout-queue health (`GET /api/cron/payout-health`)
+
+Returns a point-in-time snapshot of the payout queue so operators can detect abnormal pile-up without querying the database directly.
+
+```
+GET /api/cron/payout-health
+Authorization: Bearer <CRON_SECRET>
+```
+
+Response:
+
+```json
+{
+  "queued":              3,
+  "failed":              1,
+  "deadLettered":        0,
+  "oldestQueuedAgeSecs": 142
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `queued` | Payouts waiting to be settled. |
+| `failed` | Payouts that have failed at least once but are still retryable. |
+| `deadLettered` | Payouts that exceeded the retry threshold and require manual intervention. |
+| `oldestQueuedAgeSecs` | Seconds since the oldest queued payout was created; `null` when the queue is empty. |
+
+All four values are read in a single SQL query to avoid TOCTOU skew. The endpoint is protected by the same `Authorization: Bearer <CRON_SECRET>` check used by all other cron routes.
+
+**Verify:** `cargo test payout_health` runs four unit tests covering the response shape, null age, and struct serialization.
+## Sentry error tracing
+
+Sentry is optional. The service starts and runs normally without it.
+
+**What is captured:**
+
+| Source | How |
+|---|---|
+| Panics | `sentry` crate `panic` feature — hooks `std::panic::set_hook` |
+| `AppError::Internal` and `AppError::NotImplemented` | `sentry::capture_error` in `IntoResponse`, gated on `ErrorClass::System` |
+| `AppError::HorizonUnavailable` | Same gate, `ErrorClass::Upstream` |
+| Per-request transaction traces | `sentry_tracing::SentryHttpLayer` on the Axum router |
+| User errors (4xx) | **Not captured** — `ErrorClass::User` is excluded |
+
+**Setup:**
+
+Set these environment variables (see `.env.example`):
+
+```dotenv
+SENTRY_DSN=https://<key>@o<org>.ingest.sentry.io/<project>
+SENTRY_ENVIRONMENT=production   # or staging / development
+```
+
+Omit `SENTRY_DSN` (or leave it blank) to disable Sentry entirely — no errors, no panics, no traces are sent.
+
+**Verify:**
+
+```bash
+cargo test sentry   # runs the capture-gate unit tests in src/error.rs
+```
