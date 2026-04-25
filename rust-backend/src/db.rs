@@ -42,6 +42,23 @@ use tokio_postgres::Config as PgConfig;
 
 use crate::config::Config;
 
+/// Valid PostgreSQL SSL modes
+const VALID_SSL_MODES: &[&str] = &[
+    "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+];
+
+/// Validates PGSSL configuration at startup
+pub fn validate_ssl_mode(ssl_mode: &str) -> anyhow::Result<()> {
+    if !VALID_SSL_MODES.contains(&ssl_mode) {
+        anyhow::bail!(
+            "Invalid PGSSL mode '{}'. Valid modes are: {}",
+            ssl_mode,
+            VALID_SSL_MODES.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Snapshot of payout queue health returned by [`payout_queue_stats`].
 #[derive(Debug, serde::Serialize)]
 pub struct PayoutQueueStats {
@@ -53,6 +70,9 @@ pub struct PayoutQueueStats {
 }
 
 pub fn create_pool(config: &Config) -> anyhow::Result<Pool> {
+    // Validate SSL mode early
+    validate_ssl_mode(&config.pgssl)?;
+    
     let pg = config.database_url.inner().parse::<PgConfig>()?;
     let manager_config = ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
@@ -62,6 +82,40 @@ pub fn create_pool(config: &Config) -> anyhow::Result<Pool> {
         .runtime(Runtime::Tokio1)
         .max_size(16)
         .build()?)
+}
+
+/// Attempts to claim a payout for processing by setting worker_id and timestamp.
+/// Returns true if successfully claimed, false if already claimed by another worker.
+pub async fn claim_payout_for_processing(
+    client: &deadpool_postgres::Client,
+    payout_id: uuid::Uuid,
+    worker_id: &str,
+) -> Result<bool, tokio_postgres::Error> {
+    let rows_affected = client
+        .execute(
+            "UPDATE payouts 
+             SET processing_worker_id = $1, processing_started_at = NOW(), updated_at = NOW()
+             WHERE id = $2 AND status = 'queued' AND processing_worker_id IS NULL",
+            &[&worker_id, &payout_id],
+        )
+        .await?;
+    Ok(rows_affected > 0)
+}
+
+/// Releases a payout from processing (clears worker_id and timestamp).
+pub async fn release_payout_from_processing(
+    client: &deadpool_postgres::Client,
+    payout_id: uuid::Uuid,
+) -> Result<(), tokio_postgres::Error> {
+    client
+        .execute(
+            "UPDATE payouts 
+             SET processing_worker_id = NULL, processing_started_at = NULL, updated_at = NOW()
+             WHERE id = $1",
+            &[&payout_id],
+        )
+        .await?;
+    Ok(())
 }
 
 /// Returns a point-in-time snapshot of payout queue health.
@@ -343,16 +397,46 @@ mod tests {
         );
     }
 
-    /// Pins the settle-cron query shape so a refactor that breaks partial-index
-    /// alignment is caught at compile time rather than at runtime.
     #[test]
-    fn settle_cron_queued_query_matches_partial_index() {
-        // This is the query the settle handler (or future settlement scan) must
-        // use to benefit from payouts_queued_created_at_idx.
-        let query =
-            "SELECT * FROM payouts WHERE status = 'queued' ORDER BY created_at ASC LIMIT 100";
-        assert!(query.contains("status = 'queued'"));
-        assert!(query.contains("ORDER BY created_at ASC"));
+    fn payout_row_locking_migration_adds_processing_columns() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/017_payout_row_locking.sql");
+        let sql = std::fs::read_to_string(path).expect("read 017_payout_row_locking.sql");
+        assert!(sql.contains("processing_worker_id TEXT"));
+        assert!(sql.contains("processing_started_at TIMESTAMPTZ"));
+        assert!(sql.contains("payouts_processing_worker_idx"));
+    }
+
+    #[test]
+    fn business_name_constraint_migration_prevents_empty_names() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/018_business_name_constraint.sql");
+        let sql = std::fs::read_to_string(path).expect("read 018_business_name_constraint.sql");
+        assert!(sql.contains("merchants_business_name_not_empty"));
+        assert!(sql.contains("LENGTH(TRIM(business_name)) > 0"));
+    }
+
+    #[test]
+    fn performance_fixtures_migration_creates_test_data() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../usdc-payment-link-tool/migrations/019_performance_test_fixtures.sql");
+        let sql = std::fs::read_to_string(path).expect("read 019_performance_test_fixtures.sql");
+        assert!(sql.contains("Performance test invoice"));
+        assert!(sql.contains("performance_test_summary"));
+        assert!(sql.contains("cleanup_performance_test_data"));
+    }
+
+    #[test]
+    fn ssl_mode_validation_rejects_invalid_modes() {
+        assert!(validate_ssl_mode("invalid").is_err());
+        assert!(validate_ssl_mode("random").is_err());
+    }
+
+    #[test]
+    fn ssl_mode_validation_accepts_valid_modes() {
+        for mode in ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] {
+            assert!(validate_ssl_mode(mode).is_ok());
+        }
     }
 }
 
