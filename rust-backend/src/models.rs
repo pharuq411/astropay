@@ -118,6 +118,8 @@ pub struct Payout {
     pub failure_count: i32,
     pub last_failure_at: Option<DateTime<Utc>>,
     pub last_failure_reason: Option<String>,
+    pub processing_worker_id: Option<String>,
+    pub processing_started_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -230,6 +232,8 @@ impl Payout {
             failure_count: row.get("failure_count"),
             last_failure_at: row.get("last_failure_at"),
             last_failure_reason: row.get("last_failure_reason"),
+            processing_worker_id: row.get("processing_worker_id"),
+            processing_started_at: row.get("processing_started_at"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
