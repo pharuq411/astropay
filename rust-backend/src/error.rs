@@ -142,6 +142,28 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // Capture non-user errors to Sentry. No-ops when Sentry is not configured.
+        if matches!(self.classify(), ErrorClass::System | ErrorClass::Upstream) {
+            sentry::capture_error(&self);
+        }
+
+        match self {
+            Self::RateLimited {
+                retry_after_seconds,
+            } => {
+                let body = RateLimitedBody {
+                    error: RateLimitedInner {
+                        code: "AUTH_RATE_LIMITED",
+                        message: "Too many login attempts. Please wait before trying again."
+                            .to_string(),
+                        retry_after_seconds,
+                    },
+                };
+                let mut res = (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
+                if let Ok(h) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+                    res.headers_mut().insert(header::RETRY_AFTER, h);
+                }
+                res
         let body = Json(json!({
             "error": {
                 "code": self.code.to_string(),
@@ -181,4 +203,48 @@ impl From<uuid::Error> for AppError {
             status: StatusCode::BAD_REQUEST,
         }
     }
+
+    // --- Sentry capture gate ---
+    // Verifies which error classes should be forwarded to Sentry.
+    // The actual sentry::capture_error call is a no-op when no DSN is configured,
+    // so these tests assert the classification logic that gates the call.
+
+    #[test]
+    fn sentry_captures_system_errors() {
+        use super::{AppError, ErrorClass};
+        let errors = [AppError::Internal, AppError::not_implemented("x")];
+        for e in &errors {
+            assert_eq!(
+                e.classify(),
+                ErrorClass::System,
+                "{e:?} should be System (captured by Sentry)"
+            );
+        }
+    }
+
+    #[test]
+    fn sentry_captures_upstream_errors() {
+        use super::{AppError, ErrorClass};
+        assert_eq!(AppError::HorizonUnavailable.classify(), ErrorClass::Upstream);
+    }
+
+    #[test]
+    fn sentry_does_not_capture_user_errors() {
+        use super::{AppError, AuthErrorCode, ErrorClass};
+        let errors = [
+            AppError::bad_request("bad"),
+            AppError::unauthorized_code(AuthErrorCode::SessionRequired),
+            AppError::rate_limited(60),
+            AppError::not_found("x"),
+            AppError::conflict("x"),
+        ];
+        for e in &errors {
+            assert_eq!(
+                e.classify(),
+                ErrorClass::User,
+                "{e:?} should be User (not captured by Sentry)"
+            );
+        }
+    }
+}
 }
