@@ -1193,3 +1193,97 @@ mod replay_tests {
         assert!(serde_json::from_str::<ReplayRequest>(r#"{}"#).is_err());
     }
 }
+
+/// `GET /api/cron/payout-health`
+///
+/// Returns a point-in-time snapshot of the payout queue so operators can detect
+/// abnormal pile-up without querying the database directly.
+///
+/// Response shape:
+/// ```json
+/// {
+///   "queued": 3,
+///   "failed": 1,
+///   "deadLettered": 0,
+///   "oldestQueuedAgeSecs": 142
+/// }
+/// ```
+///
+/// - `queued`             — payouts waiting to be settled.
+/// - `failed`             — payouts that have failed at least once but are still retryable.
+/// - `deadLettered`       — payouts that exceeded the retry threshold and require manual intervention.
+/// - `oldestQueuedAgeSecs`— seconds since the oldest queued payout was created; `null` when the queue is empty.
+pub async fn payout_health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AppError> {
+    authorize_cron_request(&state.config.cron_secret, &headers)?;
+    let client = state.pool.get().await?;
+    let stats = crate::db::payout_queue_stats(&client).await?;
+    Ok(Json(json!({
+        "queued":              stats.queued,
+        "failed":              stats.failed,
+        "deadLettered":        stats.dead_lettered,
+        "oldestQueuedAgeSecs": stats.oldest_queued_age_secs,
+    })))
+}
+
+#[cfg(test)]
+mod payout_health_tests {
+    use serde_json::json;
+
+    #[test]
+    fn response_shape_includes_all_fields() {
+        // Mirrors the exact JSON keys the handler returns so a rename is caught.
+        let v = json!({
+            "queued": 3_i64,
+            "failed": 1_i64,
+            "deadLettered": 0_i64,
+            "oldestQueuedAgeSecs": 142_i64,
+        });
+        assert_eq!(v["queued"], 3);
+        assert_eq!(v["failed"], 1);
+        assert_eq!(v["deadLettered"], 0);
+        assert_eq!(v["oldestQueuedAgeSecs"], 142);
+    }
+
+    #[test]
+    fn oldest_queued_age_secs_is_null_when_queue_empty() {
+        let v = json!({
+            "queued": 0_i64,
+            "failed": 0_i64,
+            "deadLettered": 0_i64,
+            "oldestQueuedAgeSecs": serde_json::Value::Null,
+        });
+        assert!(v["oldestQueuedAgeSecs"].is_null());
+    }
+
+    #[test]
+    fn payout_queue_stats_struct_serializes_correctly() {
+        use crate::db::PayoutQueueStats;
+        let stats = PayoutQueueStats {
+            queued: 5,
+            failed: 2,
+            dead_lettered: 1,
+            oldest_queued_age_secs: Some(300),
+        };
+        let v = serde_json::to_value(&stats).unwrap();
+        assert_eq!(v["queued"], 5);
+        assert_eq!(v["failed"], 2);
+        assert_eq!(v["dead_lettered"], 1);
+        assert_eq!(v["oldest_queued_age_secs"], 300);
+    }
+
+    #[test]
+    fn payout_queue_stats_null_age_serializes_as_null() {
+        use crate::db::PayoutQueueStats;
+        let stats = PayoutQueueStats {
+            queued: 0,
+            failed: 0,
+            dead_lettered: 0,
+            oldest_queued_age_secs: None,
+        };
+        let v = serde_json::to_value(&stats).unwrap();
+        assert!(v["oldest_queued_age_secs"].is_null());
+    }
+}

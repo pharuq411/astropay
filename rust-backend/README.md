@@ -325,3 +325,34 @@ Migration `005_invoice_last_checkout_attempt_at.sql` adds a nullable `TIMESTAMPT
 **Apply:** `cargo run --bin migrate`
 
 **Verify:** `cargo test checkout_attempt` (guards that the column is nullable, is `TIMESTAMPTZ`, and that no speculative index was added).
+
+## Payout-queue health (`GET /api/cron/payout-health`)
+
+Returns a point-in-time snapshot of the payout queue so operators can detect abnormal pile-up without querying the database directly.
+
+```
+GET /api/cron/payout-health
+Authorization: Bearer <CRON_SECRET>
+```
+
+Response:
+
+```json
+{
+  "queued":              3,
+  "failed":              1,
+  "deadLettered":        0,
+  "oldestQueuedAgeSecs": 142
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `queued` | Payouts waiting to be settled. |
+| `failed` | Payouts that have failed at least once but are still retryable. |
+| `deadLettered` | Payouts that exceeded the retry threshold and require manual intervention. |
+| `oldestQueuedAgeSecs` | Seconds since the oldest queued payout was created; `null` when the queue is empty. |
+
+All four values are read in a single SQL query to avoid TOCTOU skew. The endpoint is protected by the same `Authorization: Bearer <CRON_SECRET>` check used by all other cron routes.
+
+**Verify:** `cargo test payout_health` runs four unit tests covering the response shape, null age, and struct serialization.
