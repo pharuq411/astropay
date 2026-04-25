@@ -42,6 +42,16 @@ use tokio_postgres::Config as PgConfig;
 
 use crate::config::Config;
 
+/// Snapshot of payout queue health returned by [`payout_queue_stats`].
+#[derive(Debug, serde::Serialize)]
+pub struct PayoutQueueStats {
+    pub queued: i64,
+    pub failed: i64,
+    pub dead_lettered: i64,
+    /// Age in seconds of the oldest queued payout, or `None` when the queue is empty.
+    pub oldest_queued_age_secs: Option<i64>,
+}
+
 pub fn create_pool(config: &Config) -> anyhow::Result<Pool> {
     let pg = config.database_url.parse::<PgConfig>()?;
     let manager_config = ManagerConfig {
@@ -52,6 +62,34 @@ pub fn create_pool(config: &Config) -> anyhow::Result<Pool> {
         .runtime(Runtime::Tokio1)
         .max_size(16)
         .build()?)
+}
+
+/// Returns a point-in-time snapshot of payout queue health.
+///
+/// All three counts and the oldest-queued age are fetched in a single query to
+/// avoid TOCTOU skew between separate reads.
+pub async fn payout_queue_stats(
+    client: &deadpool_postgres::Client,
+) -> Result<PayoutQueueStats, tokio_postgres::Error> {
+    let row = client
+        .query_one(
+            "SELECT
+               COUNT(*) FILTER (WHERE p.status = 'queued')                          AS queued,
+               COUNT(*) FILTER (WHERE p.status = 'failed')                          AS failed,
+               (SELECT COUNT(*) FROM payout_dead_letters)                            AS dead_lettered,
+               EXTRACT(EPOCH FROM (NOW() - MIN(p.created_at) FILTER (WHERE p.status = 'queued')))::bigint
+                                                                                     AS oldest_queued_age_secs
+             FROM payouts p",
+            &[],
+        )
+        .await?;
+
+    Ok(PayoutQueueStats {
+        queued: row.get::<_, i64>("queued"),
+        failed: row.get::<_, i64>("failed"),
+        dead_lettered: row.get::<_, i64>("dead_lettered"),
+        oldest_queued_age_secs: row.get("oldest_queued_age_secs"),
+    })
 }
 
 #[cfg(test)]
